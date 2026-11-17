@@ -1,0 +1,61 @@
+﻿Jinja 3.1.6 / original implementation / commit 15206881c006c79667fe5154fe80c01c65410679
+Command: .\.venv\Scripts\python.exe -m pytest -q -p no:cacheprovider tests/test_api.py::TestMeta::test_find_undeclared_variables_set_in_all_if_branches tests/test_api.py::TestMeta::test_find_undeclared_variables_set_in_if_and_else tests/test_api.py::TestMeta::test_find_undeclared_variables_set_in_only_one_if_branch
+
+FF.                                                                      [100%]
+================================== FAILURES ===================================
+_______ TestMeta.test_find_undeclared_variables_set_in_all_if_branches ________
+
+self = <test_api.TestMeta object at 0x000002398C2D4CD0>
+env = <jinja2.environment.Environment object at 0x000002398C26AF90>
+
+    def test_find_undeclared_variables_set_in_all_if_branches(self, env):
+        ast = env.parse(
+            "{% if control == 'something' %}"
+            "{% set output = 1 %}"
+            "{% elif control == 'something else' %}"
+            "{% set output = 2 %}"
+            "{% else %}"
+            "{% set output = 3 %}"
+            "{% endif %}"
+            "{{ output }}"
+        )
+>       assert meta.find_undeclared_variables(ast) == {"control"}
+E       AssertionError: assert {'control', 'output'} == {'control'}
+E         
+E         Extra items in the left set:
+E         'output'
+E         Use -v to get more diff
+
+tests\test_api.py:193: AssertionError
+_________ TestMeta.test_find_undeclared_variables_set_in_if_and_else __________
+
+self = <test_api.TestMeta object at 0x000002398C2896E0>
+env = <jinja2.environment.Environment object at 0x000002398C2D5950>
+
+    def test_find_undeclared_variables_set_in_if_and_else(self, env):
+        ast = env.parse(
+            "{% if control %}"
+            "{% set output = 1 %}"
+            "{% else %}"
+            "{% set output = 2 %}"
+            "{% endif %}"
+            "{{ output }}"
+        )
+>       assert meta.find_undeclared_variables(ast) == {"control"}
+E       AssertionError: assert {'control', 'output'} == {'control'}
+E         
+E         Extra items in the left set:
+E         'output'
+E         Use -v to get more diff
+
+tests\test_api.py:204: AssertionError
+=========================== short test summary info ===========================
+FAILED tests/test_api.py::TestMeta::test_find_undeclared_variables_set_in_all_if_branches
+FAILED tests/test_api.py::TestMeta::test_find_undeclared_variables_set_in_if_and_else
+2 failed, 1 passed in 0.13s
+Pytest exit code: 1
+
+Control-only command: .\.venv\Scripts\python.exe -m pytest -q -p no:cacheprovider tests/test_api.py::TestMeta::test_find_undeclared_variables_set_in_only_one_if_branch
+.                                                                        [100%]
+1 passed in 0.03s
+Control pytest exit code: 0
