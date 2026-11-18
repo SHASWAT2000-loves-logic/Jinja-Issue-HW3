@@ -45,6 +45,8 @@ class Symbols:
         self.refs: t.Dict[str, str] = {}
         self.loads: t.Dict[str, t.Any] = {}
         self.stores: t.Set[str] = set()
+        # Names assigned on every path to the current point.
+        self.definite_stores: t.Set[str] = set()
 
     def analyze_node(self, node: nodes.Node, **kwargs: t.Any) -> None:
         visitor = RootVisitor(self)
@@ -92,10 +94,12 @@ class Symbols:
         rv.refs = self.refs.copy()
         rv.loads = self.loads.copy()
         rv.stores = self.stores.copy()
+        rv.definite_stores = self.definite_stores.copy()
         return rv
 
     def store(self, name: str) -> None:
         self.stores.add(name)
+        self.definite_stores.add(name)
 
         # If we have not see the name referenced yet, we need to figure
         # out what to set it to.
@@ -114,6 +118,7 @@ class Symbols:
 
     def declare_parameter(self, name: str) -> str:
         self.stores.add(name)
+        self.definite_stores.add(name)
         return self._define_ref(name, load=(VAR_LOAD_PARAMETER, None))
 
     def load(self, name: str) -> None:
@@ -122,16 +127,31 @@ class Symbols:
 
     def branch_update(self, branch_symbols: t.Sequence["Symbols"]) -> None:
         stores: t.Set[str] = set()
+        definite_stores = branch_symbols[0].definite_stores.copy()
 
         for branch in branch_symbols:
             stores.update(branch.stores)
+            definite_stores.intersection_update(branch.definite_stores)
 
         stores.difference_update(self.stores)
+
+        # A branch may read a name before assigning it.
+        resolves: t.Set[str] = set()
+        for branch in branch_symbols:
+            for name in stores:
+                target = branch.find_ref(name)
+                if target is not None and branch.loads.get(target) == (
+                    VAR_LOAD_RESOLVE,
+                    name,
+                ):
+                    resolves.add(name)
 
         for sym in branch_symbols:
             self.refs.update(sym.refs)
             self.loads.update(sym.loads)
             self.stores.update(sym.stores)
+
+        self.definite_stores = definite_stores
 
         for name in stores:
             target = self.find_ref(name)
@@ -142,7 +162,10 @@ class Symbols:
                 if outer_target is not None:
                     self.loads[target] = (VAR_LOAD_ALIAS, outer_target)
                     continue
-            self.loads[target] = (VAR_LOAD_RESOLVE, name)
+            if name in definite_stores and name not in resolves:
+                self.loads[target] = (VAR_LOAD_UNDEFINED, None)
+            else:
+                self.loads[target] = (VAR_LOAD_RESOLVE, name)
 
     def dump_stores(self) -> t.Dict[str, str]:
         rv: t.Dict[str, str] = {}
@@ -251,6 +274,9 @@ class FrameSymbolVisitor(NodeVisitor):
 
     def visit_If(self, node: nodes.If, **kwargs: t.Any) -> None:
         self.visit(node.test, **kwargs)
+        # Elif tests run before any branch body, and each body is a separate path.
+        for elif_ in node.elif_:
+            self.visit(elif_.test, **kwargs)
         original_symbols = self.symbols
 
         def inner_visit(nodes: t.Iterable[nodes.Node]) -> "Symbols":
@@ -262,10 +288,10 @@ class FrameSymbolVisitor(NodeVisitor):
             self.symbols = original_symbols
             return rv
 
-        body_symbols = inner_visit(node.body)
-        elif_symbols = inner_visit(node.elif_)
-        else_symbols = inner_visit(node.else_ or ())
-        self.symbols.branch_update([body_symbols, elif_symbols, else_symbols])
+        branches = [inner_visit(node.body)]
+        branches.extend(inner_visit(elif_.body) for elif_ in node.elif_)
+        branches.append(inner_visit(node.else_ or ()))
+        self.symbols.branch_update(branches)
 
     def visit_Macro(self, node: nodes.Macro, **kwargs: t.Any) -> None:
         self.symbols.store(node.name)

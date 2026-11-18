@@ -214,6 +214,199 @@ class TestMeta:
         )
         assert meta.find_undeclared_variables(ast) == {"control", "output"}
 
+    @pytest.mark.parametrize(
+        ("source", "expected"),
+        [
+            (
+                "{% if first %}{% set output = 1 %}"
+                "{% elif second %}no assignment"
+                "{% else %}{% set output = 3 %}{% endif %}{{ output }}",
+                {"first", "second", "output"},
+            ),
+            (
+                "{% if control %}{% set output = 1 %}{% endif %}{{ output }}",
+                {"control", "output"},
+            ),
+            (
+                "{% if outer %}{% if inner %}{% set output = 1 %}"
+                "{% else %}{% set output = 2 %}{% endif %}"
+                "{% else %}{% set output = 3 %}{% endif %}{{ output }}",
+                {"outer", "inner"},
+            ),
+            (
+                "{% if outer %}{% if inner %}{% set output = 1 %}"
+                "{% endif %}{% else %}{% set output = 3 %}"
+                "{% endif %}{{ output }}",
+                {"outer", "inner", "output"},
+            ),
+            (
+                "{% set output = 0 %}{% if control %}"
+                "{% set output = 1 %}{% endif %}{{ output }}",
+                {"control"},
+            ),
+            (
+                "{{ output }}{% if control %}{% set output = 1 %}"
+                "{% else %}{% set output = 2 %}{% endif %}{{ output }}",
+                {"control", "output"},
+            ),
+            (
+                "{% if control %}{% set always = 1 %}{% set maybe = 2 %}"
+                "{% else %}{% set always = 3 %}{% endif %}"
+                "{{ always }}{{ maybe }}",
+                {"control", "maybe"},
+            ),
+            (
+                "{% if control %}{% set output = output + 1 %}"
+                "{% else %}{% set output = 2 %}{% endif %}{{ output }}",
+                {"control", "output"},
+            ),
+            (
+                "{% if control %}{% set output = 1 %}"
+                "{% elif output %}{% set output = 2 %}"
+                "{% else %}{% set output = 3 %}{% endif %}{{ output }}",
+                {"control", "output"},
+            ),
+            (
+                "{% for item in items %}{% if item %}{% set output = item %}"
+                "{% else %}{% set output = 0 %}{% endif %}"
+                "{{ output }}{% endfor %}",
+                {"items"},
+            ),
+            (
+                "{% for item in items %}{% if item %}{% set output = item %}"
+                "{% else %}{% set output = 0 %}{% endif %}"
+                "{% endfor %}{{ output }}",
+                {"items", "output"},
+            ),
+            (
+                "{% macro choose(control) %}{% if control %}"
+                "{% set output = 1 %}{% else %}{% set output = 2 %}"
+                "{% endif %}{{ output }}{% endmacro %}{{ choose(flag) }}",
+                {"flag"},
+            ),
+        ],
+        ids=[
+            "partial-elif-chain",
+            "missing-else",
+            "nested-complete",
+            "nested-incomplete",
+            "assigned-before-if",
+            "read-before-assignment",
+            "mixed-assignments",
+            "read-in-assignment-value",
+            "read-in-elif-condition",
+            "loop-local-assignment",
+            "loop-assignment-does-not-escape",
+            "macro-local-assignment",
+        ],
+    )
+    def test_find_undeclared_variables_conditional_paths(self, env, source, expected):
+        assert meta.find_undeclared_variables(env.parse(source)) == expected
+
+    def test_find_undeclared_variables_conditional_global(self, env):
+        env.globals["global_value"] = 5
+        source = (
+            "{% if control %}{% set output = global_value %}"
+            "{% else %}{% set output = 2 %}{% endif %}{{ output }}"
+        )
+        assert meta.find_undeclared_variables(env.parse(source)) == {"control"}
+        assert env.from_string(source).render(control=True) == "5"
+
+    @pytest.mark.parametrize(
+        ("source", "context", "expected"),
+        [
+            (
+                "{% if control %}{% set output = 1 %}"
+                "{% else %}{% set output = 2 %}{% endif %}{{ output }}",
+                {"control": False, "output": 99},
+                "2",
+            ),
+            (
+                "{% if control == 'a' %}{% set output = 1 %}"
+                "{% elif control == 'b' %}{% set output = 2 %}"
+                "{% else %}{% set output = 3 %}{% endif %}{{ output }}",
+                {"control": "b", "output": 99},
+                "2",
+            ),
+            (
+                "{% if control %}{% set output = 1 %}"
+                "{% else %}{% endif %}{{ output }}",
+                {"control": False, "output": 99},
+                "99",
+            ),
+            (
+                "{% if outer %}{% if inner %}{% set output = 1 %}"
+                "{% else %}{% set output = 2 %}{% endif %}"
+                "{% else %}{% set output = 3 %}{% endif %}{{ output }}",
+                {"outer": True, "inner": False},
+                "2",
+            ),
+            (
+                "{% if outer %}{% if inner %}{% set output = 1 %}"
+                "{% else %}{% set output = 2 %}{% endif %}"
+                "{% else %}{% set output = 3 %}{% endif %}{{ output }}",
+                {"outer": False, "inner": False},
+                "3",
+            ),
+            (
+                "{% if outer %}{% if inner %}{% set output = 1 %}"
+                "{% endif %}{% else %}{% set output = 3 %}"
+                "{% endif %}{{ output }}",
+                {"outer": True, "inner": False, "output": 99},
+                "99",
+            ),
+            (
+                "{% set output = 0 %}{% if control %}"
+                "{% set output = 1 %}{% endif %}{{ output }}",
+                {"control": False, "output": 99},
+                "0",
+            ),
+            (
+                "{{ output }}|{% if control %}{% set output = 1 %}"
+                "{% else %}{% set output = 2 %}{% endif %}{{ output }}",
+                {"control": False, "output": 99},
+                "99|2",
+            ),
+            (
+                "{% if control %}{% set always = 1 %}{% set maybe = 2 %}"
+                "{% else %}{% set always = 3 %}{% endif %}"
+                "{{ always }}|{{ maybe }}",
+                {"control": False, "maybe": 99},
+                "3|99",
+            ),
+            (
+                "{% set output = 'outer' %}{% for item in items %}"
+                "{% if item == 1 %}{% set output = 'inner' %}"
+                "{% else %}{% set output = 'other' %}{% endif %}"
+                "{{ output }}{% endfor %}{{ output }}",
+                {"items": [1, 2]},
+                "innerotherouter",
+            ),
+            (
+                "{% macro choose(control) %}{% if control %}"
+                "{% set output = 1 %}{% else %}{% set output = 2 %}"
+                "{% endif %}{{ output }}{% endmacro %}{{ choose(flag) }}",
+                {"flag": False},
+                "2",
+            ),
+        ],
+        ids=[
+            "if-else-overrides-external",
+            "elif-selects-value",
+            "missing-else-uses-external",
+            "nested-inner-else",
+            "nested-outer-else",
+            "nested-incomplete-uses-external",
+            "prior-assignment-survives",
+            "read-before-assignment",
+            "mixed-assignments",
+            "loop-retains-outer-value",
+            "macro-local-value",
+        ],
+    )
+    def test_render_conditional_assignments(self, env, source, context, expected):
+        assert env.from_string(source).render(**context) == expected
+
     def test_find_refererenced_templates(self, env):
         ast = env.parse('{% extends "layout.html" %}{% include helper %}')
         i = meta.find_referenced_templates(ast)
